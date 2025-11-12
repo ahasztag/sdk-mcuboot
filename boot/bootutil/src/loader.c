@@ -50,6 +50,10 @@
 #include "bootutil/boot_hooks.h"
 #include "bootutil/mcuboot_status.h"
 
+#ifdef CONFIG_NCS_BOOT_SIGNATURE_USING_ITS
+#include <psa/crypto.h>
+#endif
+
 #if defined(MCUBOOT_DECOMPRESS_IMAGES)
 #include <nrf_compress/implementation.h>
 #include <compression/decompression.h>
@@ -2669,6 +2673,29 @@ check_downgrade_prevention(struct boot_loader_state *state)
 #endif
 }
 
+#ifdef CONFIG_NCS_BOOT_SIGNATURE_USING_ITS
+
+static const uint8_t key_data[32] = {
+    0xd4, 0xb3, 0x1b, 0xa4, 0x9a, 0x3a, 0xdd, 0x3f, 0x82, 0x5d, 0x10, 0xca, 0x7f, 0x31, 0xb5, 0x0b,
+    0x0d, 0xe8, 0x7f, 0x37, 0xcc, 0xc4, 0x9f, 0x1a, 0x40, 0x3a, 0x5c, 0x13, 0x20, 0xff, 0xb4, 0xe0
+};
+
+
+static void test_psa_key_import(void)
+{
+    BOOT_LOG_WRN("IMPORTING KEY");
+    psa_key_attributes_t key_attributes = psa_key_attributes_init();
+    psa_set_key_lifetime(&key_attributes, PSA_KEY_LIFETIME_FROM_PERSISTENCE_AND_LOCATION(PSA_KEY_PERSISTENCE_DEFAULT, PSA_KEY_LOCATION_LOCAL_STORAGE));
+    psa_set_key_id(&key_attributes, 0x40022102);
+    psa_set_key_usage_flags(&key_attributes, PSA_KEY_USAGE_VERIFY_HASH);
+    psa_set_key_algorithm(&key_attributes, PSA_ALG_PURE_EDDSA);
+    psa_set_key_type(&key_attributes, PSA_KEY_TYPE_ECC_PUBLIC_KEY(PSA_ECC_FAMILY_TWISTED_EDWARDS));
+    uint32_t key_id_out = 0;
+    psa_status_t psa_stat = psa_import_key(&key_attributes, key_data, 32, &key_id_out);
+    BOOT_LOG_ERR("KEY IMPORT STATUS %d, key ID: %x\n", psa_stat, key_id_out);
+}
+#endif
+
 fih_ret
 context_boot_go(struct boot_loader_state *state, struct boot_rsp *rsp)
 {
@@ -2680,6 +2707,9 @@ context_boot_go(struct boot_loader_state *state, struct boot_rsp *rsp)
     volatile int fih_cnt;
 
     BOOT_LOG_DBG("context_boot_go");
+#ifdef CONFIG_NCS_BOOT_SIGNATURE_USING_ITS
+    test_psa_key_import();
+#endif
 
 #if defined(__BOOTSIM__)
     struct boot_sector_buffer sector_buf;

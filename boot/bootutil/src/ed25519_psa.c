@@ -140,6 +140,7 @@ int ED25519_verify(const uint8_t *message, size_t message_len,
         status = psa_verify_message(kid, PSA_ALG_PURE_EDDSA, message,
                                     message_len, signature,
                                     EDDSA_SIGNAGURE_LENGTH);
+        BOOT_LOG_WRN("ED25519 signature verification status %d", status);
         if (status == PSA_SUCCESS) {
 #if defined(CONFIG_BOOT_KMU_KEYS_REVOCATION)
             validated_with = key_ids + i;
