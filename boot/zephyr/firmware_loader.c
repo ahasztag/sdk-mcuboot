@@ -27,6 +27,8 @@ BOOT_LOG_MODULE_DECLARE(mcuboot);
 static const struct flash_area *_fa_p;
 static struct image_header _hdr = { 0 };
 
+#define IMAGE_TLV_UNBOXER_IMAGE 0xa0
+
 #if defined(MCUBOOT_VALIDATE_PRIMARY_SLOT) || defined(MCUBOOT_VALIDATE_PRIMARY_SLOT_ONCE)
 /**
  * Validate hash of a primary boot image.
@@ -162,7 +164,11 @@ other:
 fih_ret
 boot_go(struct boot_rsp *rsp)
 {
+    int rc;
     bool boot_firmware_loader = false;
+    bool boot_primary_image_valid = false;
+    bool unboxer_present = false;
+
     FIH_DECLARE(fih_rc, FIH_FAILURE);
 
     BOOT_LOG_DBG("boot_go: firmware loader");
@@ -192,11 +198,58 @@ boot_go(struct boot_rsp *rsp)
     }
 #endif
 
+    FIH_CALL(validate_image_slot, fih_rc, FLASH_AREA_IMAGE_PRIMARY(0), rsp);
+    if (FIH_EQ(fih_rc, FIH_SUCCESS)) {
+        boot_primary_image_valid = true;
+
+        rc = flash_area_open(FLASH_AREA_IMAGE_PRIMARY(0), &_fa_p);
+        if (rc != 0) {
+            FIH_RET(FIH_FAILURE);
+        }
+
+        struct image_header hdr_primary_image = { 0 };
+        rc = boot_image_load_header(_fa_p, &hdr_primary_image);
+
+        if (rc == 0) {
+            struct image_tlv_iter it;
+            uint32_t off;
+            uint16_t len;
+
+            if (hdr_primary_image.ih_protect_tlv_size > 0) {
+                rc = bootutil_tlv_iter_begin(&it, &hdr_primary_image, _fa_p,
+                                             IMAGE_TLV_UNBOXER_IMAGE, true);
+
+                if (rc == 0) {
+                    rc = bootutil_tlv_iter_next(&it, &off, &len, NULL);
+
+                    if (rc == 0 && len == sizeof(unboxer_present)) {
+                        rc = LOAD_IMAGE_DATA(&hdr_primary_image, _fa_p, off,
+                                             &unboxer_present, len);
+
+                        if (rc != 0) {
+                            unboxer_present = false;
+                        }
+                    }
+                }
+            }
+        }
+
+        flash_area_close(_fa_p);
+    }
+
     /* Check if firmware loader button is pressed. TODO: check all entrance methods */
     if (boot_firmware_loader == true) {
         FIH_CALL(validate_image_slot, fih_rc, FLASH_AREA_IMAGE_SECONDARY(0), rsp);
 
         if (FIH_EQ(fih_rc, FIH_SUCCESS)) {
+            if (unboxer_present == true) {
+                /* Invalidate unboxer image */
+                rc = flash_area_open(FLASH_AREA_IMAGE_PRIMARY(0), &_fa_p);
+                if (rc == 0) {
+                    boot_scramble_slot(_fa_p, 0);
+                    flash_area_close(_fa_p);
+                }
+            }
             FIH_RET(fih_rc);
         }
     }
@@ -204,7 +257,7 @@ boot_go(struct boot_rsp *rsp)
     FIH_CALL(validate_image_slot, fih_rc, FLASH_AREA_IMAGE_PRIMARY(0), rsp);
 
 #ifdef CONFIG_BOOT_FIRMWARE_LOADER_NO_APPLICATION
-    if (FIH_NOT_EQ(fih_rc, FIH_SUCCESS)) {
+    if (FIH_NOT_EQ(boot_primary_image_valid, true)) {
         FIH_CALL(validate_image_slot, fih_rc, FLASH_AREA_IMAGE_SECONDARY(0), rsp);
     }
 #endif
